@@ -178,12 +178,26 @@ def load_input() -> Dict[str, Any]:
             logging.warning("Failed to parse APIFY_INPUT env var: %s", e)
 
     env_path = os.getenv("APIFY_INPUT_PATH") or os.getenv("INPUT_PATH")
-    default_paths = [env_path, "input.json", "input.local.json"]
-    for path in default_paths:
-        if path and os.path.exists(path):
-            logging.info("Loading input from %s", path)
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
+
+    storage_dir = os.getenv("APIFY_LOCAL_STORAGE_DIR", "/apify_storage")
+    store_id = os.getenv("APIFY_DEFAULT_KEY_VALUE_STORE_ID", "default")
+    kv_paths = [
+        os.path.join(storage_dir, "key_value_stores", store_id, "INPUT.json"),
+        os.path.join(storage_dir, "key_value_stores", store_id, "INPUT"),
+    ]
+
+    fallback_paths = ["input.json", "input.local.json"]
+
+    for path in filter(None, [env_path, *kv_paths, *fallback_paths]):
+        if os.path.exists(path):
+            try:
+                logging.info("Loading input from %s", path)
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logging.warning("Failed to parse %s: %s", path, e)
+                continue
+
     logging.warning("No input file found, using defaults")
     return {}
 
