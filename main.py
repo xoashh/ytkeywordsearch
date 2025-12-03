@@ -173,6 +173,7 @@ def load_input() -> Dict[str, Any]:
     default_paths = [env_path, "input.json", "input.local.json"]
     for path in default_paths:
         if path and os.path.exists(path):
+            logging.info("Loading input from %s", path)
             with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
     logging.warning("No input file found, using defaults")
@@ -473,9 +474,20 @@ def search_term(term: str, page: Page, max_results: int) -> List[str]:
 # -----------------------
 def run():
     input_data = load_input()
-    start_urls = [u.get("url") if isinstance(u, dict) else u for u in input_data.get("startUrls", [])]
-    search_terms = input_data.get("searchTerms", []) or []
+    # Normalize URL inputs
+    raw_start_urls = input_data.get("startUrls", []) or []
+    raw_direct_urls = input_data.get("directUrls", []) or []
+    start_urls = [u.get("url") if isinstance(u, dict) else u for u in raw_start_urls + raw_direct_urls]
+
+    # Normalize search terms (accept string, legacy keys, or list)
+    search_terms = input_data.get("searchTerms") or input_data.get("searchTerm") or input_data.get("query") or []
+    if isinstance(search_terms, str):
+        search_terms = [search_terms]
+    search_terms = [s for s in search_terms if s]
+
+    # Caps
     max_results = int(input_data.get("maxResults", 10) or 10)
+    max_videos_per_term = int(input_data.get("maxVideosPerTerm", max_results) or max_results)
 
     targets: List[str] = []
     for url in start_urls:
@@ -490,11 +502,19 @@ def run():
         for term in search_terms:
             if STOP_FLAG:
                 break
-            term_targets = search_term(term, page, max_results)
+            term_targets = search_term(term, page, max_videos_per_term)
             targets.extend(term_targets)
 
-        results: List[Dict[str, Any]] = []
+        # Deduplicate while preserving order
+        seen = set()
+        deduped_targets: List[str] = []
         for url in targets:
+            if url and url not in seen:
+                seen.add(url)
+                deduped_targets.append(url)
+
+        results: List[Dict[str, Any]] = []
+        for url in deduped_targets:
             if STOP_FLAG:
                 break
             vid = extract_video_id(url)
@@ -507,6 +527,9 @@ def run():
                 final_url = video_page.url or url
                 metadata = extract_video_metadata_hybrid(vid, final_url, video_page)
                 results.append(metadata)
+                if len(results) >= max_results:
+                    logging.info("Reached max_results cap (%s)", max_results)
+                    break
             except PWTimeoutError:
                 logging.error("Timeout while processing %s", url)
             except Exception as e:
